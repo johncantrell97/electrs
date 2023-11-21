@@ -39,6 +39,7 @@ pub struct Config {
     pub utxos_limit: usize,
     pub electrum_txs_limit: usize,
     pub electrum_banner: String,
+    pub read_only: bool,
 
     #[cfg(feature = "liquid")]
     pub parent_network: BNetwork,
@@ -142,6 +143,11 @@ impl Config {
                 Arg::with_name("light_mode")
                     .long("lightmode")
                     .help("Enable light mode for reduced storage")
+            )
+            .arg(
+                Arg::with_name("read_only")
+                    .long("readonly")
+                    .help("Enable readonly mode")
             )
             .arg(
                 Arg::with_name("address_search")
@@ -399,6 +405,7 @@ impl Config {
             monitoring_addr,
             jsonrpc_import: m.is_present("jsonrpc_import"),
             light_mode: m.is_present("light_mode"),
+            read_only: m.is_present("read_only"),
             address_search: m.is_present("address_search"),
             index_unspendables: m.is_present("index_unspendables"),
             cors: m.value_of("cors").map(|s| s.to_string()),
