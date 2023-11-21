@@ -1,0 +1,90 @@
+extern crate error_chain;
+#[macro_use]
+extern crate log;
+
+extern crate electrs;
+
+use error_chain::ChainedError;
+use std::process;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+
+use electrs::{
+    config::Config,
+    daemon::Daemon,
+    electrum::RPC as ElectrumRPC,
+    errors::*,
+    metrics::Metrics,
+    new_index::{precache, ChainQuery, FetchFrom, Indexer, Mempool, Query, Store},
+    rest,
+    signal::Waiter,
+};
+
+
+fn run_server(config: Arc<Config>) -> Result<()> {
+    let signal = Waiter::start();
+    let metrics = Metrics::new(config.monitoring_addr);
+    metrics.start();
+
+    let daemon = Arc::new(Daemon::new(
+        &config.daemon_dir,
+        &config.blocks_dir,
+        config.daemon_rpc_addr,
+        config.cookie_getter(),
+        config.network_type,
+        signal.clone(),
+        &metrics,
+    )?);
+
+    let store = Arc::new(Store::open(&config.db_path.join("newindex"), &config));
+    
+    let chain = Arc::new(ChainQuery::new(
+        Arc::clone(&store),
+        Arc::clone(&daemon),
+        &config,
+        &metrics,
+    ));
+
+    if let Some(ref precache_file) = config.precache_scripts {
+        let precache_scripthashes = precache::scripthashes_from_file(precache_file.to_string())
+            .expect("cannot load scripts to precache");
+        precache::precache(&chain, precache_scripthashes);
+    }
+
+    let mempool = Arc::new(RwLock::new(Mempool::new(
+        Arc::clone(&chain),
+        &metrics,
+        Arc::clone(&config),
+    )));
+    mempool.write().unwrap().update(&daemon)?;
+
+    let query = Arc::new(Query::new(
+        Arc::clone(&chain),
+        Arc::clone(&mempool),
+        Arc::clone(&daemon),
+        Arc::clone(&config),
+    ));
+
+    let rest_server = rest::start(Arc::clone(&config), Arc::clone(&query));
+
+    loop {
+        if let Err(err) = signal.wait(Duration::from_secs(5), true) {
+            info!("stopping server: {}", err);
+            rest_server.stop();
+            break;
+        }
+
+        // Update mempool
+        mempool.write().unwrap().update(&daemon)?;
+    }
+    info!("server stopped");
+    Ok(())
+}
+
+fn main() {
+    let config = Arc::new(Config::from_args());
+    if let Err(e) = run_server(config) {
+        error!("server failed: {}", e.display_chain());
+        process::exit(1);
+    }
+}
