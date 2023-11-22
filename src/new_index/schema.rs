@@ -257,6 +257,23 @@ impl Indexer {
         Ok(result)
     }
 
+    pub fn update_headers_only(&mut self, daemon: &Daemon) -> Result<BlockHash> {
+        let daemon = daemon.reconnect()?;
+        // get the tip from store, means indexer has finished indexing up to this height and is safe to read
+        let tip_bytes = self.store.txstore_db.get(b"t").ok_or(format!("indexer must sync before starting http service"))?;
+        let tip =  deserialize(&tip_bytes).expect("invalid chain tip in `t`");
+        
+        // TODO: should be able to get these from txstore_db instead of daemon
+        // low priority because it is typically just 1 header fetched ~every 10 minutes
+        let new_headers = self.get_new_headers(&daemon, &tip)?;
+
+        let mut headers = self.store.indexed_headers.write().unwrap();
+        headers.apply(new_headers);
+        assert_eq!(tip, *headers.tip());
+
+        Ok(tip)
+    }
+
     pub fn update(&mut self, daemon: &Daemon) -> Result<BlockHash> {
         let daemon = daemon.reconnect()?;
         let tip = daemon.getbestblockhash()?;
@@ -268,7 +285,7 @@ impl Indexer {
             to_add.len(),
             self.from
         );
-        start_fetcher(self.from, &daemon, to_add)?.map(|blocks| self.add(&blocks));
+        start_fetcher(self.from, &daemon, to_add)?.map(|blocks: Vec<BlockEntry>| self.add(&blocks));
         self.start_auto_compactions(&self.store.txstore_db);
 
         let to_index = self.headers_to_index(&new_headers);
