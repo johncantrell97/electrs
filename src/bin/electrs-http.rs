@@ -65,6 +65,14 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         Arc::clone(&config),
     ));
 
+    let mut indexer = Indexer::open(
+        Arc::clone(&store),
+        fetch_from(&config, &store),
+        &config,
+        &metrics,
+    );
+    let mut tip = indexer.update_headers_only(&daemon)?;
+
     let rest_server = rest::start(Arc::clone(&config), Arc::clone(&query));
 
     loop {
@@ -73,6 +81,13 @@ fn run_server(config: Arc<Config>) -> Result<()> {
             rest_server.stop();
             break;
         }
+
+        // Index new blocks
+        let current_tip = daemon.getbestblockhash()?;
+        if current_tip != tip {
+            indexer.update_headers_only(&daemon)?;
+            tip = current_tip;
+        };
 
         // Update mempool
         mempool.write().unwrap().update(&daemon)?;
