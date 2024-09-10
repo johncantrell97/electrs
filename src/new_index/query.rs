@@ -54,7 +54,12 @@ impl Query {
     }
 
     pub fn chain(&self) -> &ChainQuery {
-        &self.chain
+        if self.config.read_only {
+            self.chain.ensure_sync(self.daemon.as_ref());
+            &self.chain
+        } else {
+            &self.chain
+        }
     }
 
     pub fn config(&self) -> &Config {

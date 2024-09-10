@@ -99,6 +99,21 @@ impl Store {
     pub fn done_initial_sync(&self) -> bool {
         self.txstore_db.get(b"t").is_some()
     }
+
+    pub fn new_tip_available(&self) -> Result<Option<BlockHash>> {
+        let tip_bytes = self
+            .txstore_db
+            .get(b"t")
+            .ok_or(format!("indexer must sync before starting http service"))?;
+        let tip = deserialize(&tip_bytes).expect("invalid chain tip in `t`");
+
+        let headers = self.indexed_headers.read().unwrap();
+        if headers.tip() == tip {
+            Ok(None)
+        } else {
+            Ok(Some(tip))
+        }
+    }
 }
 
 type UtxoMap = HashMap<OutPoint, (BlockId, Value)>;
@@ -260,9 +275,13 @@ impl Indexer {
     pub fn update_headers_only(&mut self, daemon: &Daemon) -> Result<BlockHash> {
         let daemon = daemon.reconnect()?;
         // get the tip from store, means indexer has finished indexing up to this height and is safe to read
-        let tip_bytes = self.store.txstore_db.get(b"t").ok_or(format!("indexer must sync before starting http service"))?;
-        let tip =  deserialize(&tip_bytes).expect("invalid chain tip in `t`");
-        
+        let tip_bytes = self
+            .store
+            .txstore_db
+            .get(b"t")
+            .ok_or(format!("indexer must sync before starting http service"))?;
+        let tip = deserialize(&tip_bytes).expect("invalid chain tip in `t`");
+
         // TODO: should be able to get these from txstore_db instead of daemon
         // low priority because it is typically just 1 header fetched ~every 10 minutes
         let new_headers = self.get_new_headers(&daemon, &tip)?;
@@ -371,6 +390,12 @@ impl ChainQuery {
                 HistogramOpts::new("query_duration", "Index query duration (in seconds)"),
                 &["name"],
             ),
+        }
+    }
+
+    pub fn ensure_sync(&self) {
+        if self.store.new_tip_available() {
+            self.update_headers_only(daemon);
         }
     }
 
